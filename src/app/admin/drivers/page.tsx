@@ -129,25 +129,39 @@ function AdminDriversContent() {
         
         enqueueSnackbar(t('drivers.updateSuccess'), { variant: 'success' });
       } else {
-        // Create new driver with auth user
+        // First, create the auth user without metadata (to avoid trigger issues)
         const { data: authData, error: authError } = await supabase.auth.signUp({
           email: currentDriver.email!,
           password: tempPassword,
-          options: {
-            data: {
-              first_name: currentDriver.first_name,
-              last_name: currentDriver.last_name,
-              employee_type: currentDriver.employee_type,
-              is_admin: currentDriver.is_admin,
-            },
-          },
         });
 
         if (authError) throw authError;
 
-        // Send password to driver's email (in production, use proper email service)
-        enqueueSnackbar(t('drivers.createSuccess'), { variant: 'success' });
-        enqueueSnackbar(t('drivers.emailSent'), { variant: 'info' });
+        if (authData.user) {
+          // Then create or update the profile directly
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .upsert({
+              id: authData.user.id,
+              email: currentDriver.email!,
+              first_name: currentDriver.first_name!,
+              last_name: currentDriver.last_name!,
+              employee_type: currentDriver.employee_type || 'Vollzeit Mitarbeiter',
+              is_admin: currentDriver.is_admin || false,
+            });
+
+          if (profileError) {
+            // If profile creation fails, try to clean up the auth user
+            console.error('Profile creation error:', profileError);
+            // Note: We can't delete the user from client-side, would need admin API
+            throw profileError;
+          }
+
+          enqueueSnackbar(t('drivers.createSuccess'), { variant: 'success' });
+          
+          // In production, send welcome email with credentials
+          enqueueSnackbar(t('drivers.emailSent'), { variant: 'info' });
+        }
       }
 
       handleCloseDialog();
@@ -162,18 +176,39 @@ function AdminDriversContent() {
     if (!currentDriver?.id) return;
 
     try {
-      // Delete auth user (this will cascade delete the profile)
-      const { error } = await supabase.auth.admin.deleteUser(currentDriver.id);
+      // First try to delete the profile (this should cascade to delete shifts)
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', currentDriver.id);
       
-      if (error) {
-        // If admin API fails, try deleting profile directly
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .delete()
-          .eq('id', currentDriver.id);
-        
-        if (profileError) throw profileError;
+      if (profileError) {
+        // If it's a foreign key constraint error, it means there are shifts
+        if (profileError.code === '23503') {
+          // Try deleting shifts first
+          const { error: shiftsError } = await supabase
+            .from('shifts')
+            .delete()
+            .eq('driver_id', currentDriver.id);
+          
+          if (!shiftsError) {
+            // Try deleting profile again
+            const { error: retryError } = await supabase
+              .from('profiles')
+              .delete()
+              .eq('id', currentDriver.id);
+            
+            if (retryError) throw retryError;
+          } else {
+            throw profileError;
+          }
+        } else {
+          throw profileError;
+        }
       }
+
+      // Note: The auth user will remain but won't be able to login without a profile
+      // In production, you'd want to use Edge Functions or server-side code to delete the auth user
 
       enqueueSnackbar(t('drivers.deleteSuccess'), { variant: 'success' });
       setDeleteDialogOpen(false);
