@@ -147,7 +147,7 @@ function AdminAnalyticsContent() {
         const shiftDate = parseISO(shift.start_time);
         return format(shiftDate, 'yyyy-MM-dd') === format(day, 'yyyy-MM-dd');
       });
-      return shiftsPerDay.length;
+      return dayShifts.length; // Fixed: was incorrectly referencing shiftsPerDay.length
     });
 
     return {
