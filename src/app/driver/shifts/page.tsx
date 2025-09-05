@@ -115,7 +115,7 @@ function DriverShiftsContent() {
 
       if (userError) throw userError;
 
-      // Fetch all shifts for availability view
+      // Fetch all shifts for availability view (NO driver filter - show ALL shifts)
       const startDate = startOfMonth(selectedDate);
       const endDate = endOfMonth(selectedDate);
       

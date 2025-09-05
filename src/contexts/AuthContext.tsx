@@ -66,11 +66,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.log('Auth state changed:', event);
         
         // Handle different auth events
-        if (event === 'SIGNED_IN') {
+        if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
           setSession(session);
           setUser(session?.user ?? null);
           if (session?.user) {
             await fetchProfile(session.user.id);
+            // Force a data refresh after signin
+            window.location.reload();
           }
         } else if (event === 'SIGNED_OUT') {
           setSession(null);
@@ -80,12 +82,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else if (event === 'TOKEN_REFRESHED') {
           setSession(session);
           setUser(session?.user ?? null);
-        } else if (event === 'USER_UPDATED') {
-          setSession(session);
-          setUser(session?.user ?? null);
-          if (session?.user) {
-            await fetchProfile(session.user.id);
-          }
         }
         
         setLoading(false);

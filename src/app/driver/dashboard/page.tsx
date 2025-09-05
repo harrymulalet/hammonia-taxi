@@ -142,7 +142,7 @@ function DriverDashboardContent() {
           <Grid item xs={12}>
             <Alert severity="info" icon={<Schedule />}>
               <Typography variant="subtitle1">
-                Today's Shift: {todaysShift.taxi?.license_plate} | {' '}
+                {t('dashboard.todaysShifts')}: {todaysShift.taxi?.license_plate} | {' '}
                 {format(parseISO(todaysShift.start_time), 'HH:mm')} - 
                 {format(parseISO(todaysShift.end_time), 'HH:mm')}
               </Typography>
@@ -189,7 +189,7 @@ function DriverDashboardContent() {
               <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
                 <Schedule sx={{ mr: 1, color: 'success.main' }} />
                 <Typography color="textSecondary" variant="subtitle2">
-                  Next Shift In
+                  {t('analytics.nextShiftIn')}
                 </Typography>
               </Box>
               <Typography variant="h4">
