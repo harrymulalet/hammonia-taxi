@@ -50,7 +50,7 @@ function BookShiftContent() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [endTime, setEndTime] = useState<Date | null>(null);
-  const [multipleDays, setMultipleDays] = useState(false);
+  const [multipleDay  s, setMultipleDays] = useState(false);
   const [selectedDates, setSelectedDates] = useState<Date[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [validationError, setValidationError] = useState('');
@@ -82,10 +82,11 @@ function BookShiftContent() {
   };
 
   const checkConflicts = async () => {
-    if (!selectedTaxi || !startTime || !endTime) return;
+    if (!selectedTaxi || !startTime || !endTime || !user) return;
 
     const datesToCheck = multipleDays ? selectedDates : [selectedDate!];
     const conflictDates: string[] = [];
+    const driverConflictDates: string[] = [];
 
     for (const date of datesToCheck) {
       if (!date) continue;
@@ -101,18 +102,37 @@ function BookShiftContent() {
         shiftEnd.setDate(shiftEnd.getDate() + 1);
       }
 
-      const { data: existingShifts } = await supabase
-        .from('shifts')
-        .select('*')
-        .eq('taxi_id', selectedTaxi)
-        .or(`and(start_time.lt.${shiftEnd.toISOString()},end_time.gt.${shiftStart.toISOString()})`) as any;
+      // Check taxi availability
+      const { data: taxiAvailable } = await supabase
+        .rpc('check_taxi_availability', {
+          p_taxi_id: selectedTaxi,
+          p_start_time: shiftStart.toISOString(),
+          p_end_time: shiftEnd.toISOString(),
+        });
 
-      if (existingShifts && existingShifts.length > 0) {
+      // Check driver availability
+      const { data: driverAvailable } = await supabase
+        .rpc('check_driver_availability', {
+          p_driver_id: user.id,
+          p_start_time: shiftStart.toISOString(),
+          p_end_time: shiftEnd.toISOString(),
+        });
+
+      if (!taxiAvailable) {
         conflictDates.push(format(date, 'MMM d, yyyy'));
+      }
+      
+      if (!driverAvailable) {
+        driverConflictDates.push(format(date, 'MMM d, yyyy'));
       }
     }
 
     setConflicts(conflictDates);
+    
+    // Set validation error if driver has conflicts
+    if (driverConflictDates.length > 0) {
+      setValidationError(`You already have shifts scheduled on: ${driverConflictDates.join(', ')}`);
+    }
   };
 
   const validateShift = (): boolean => {
@@ -178,9 +198,7 @@ function BookShiftContent() {
         });
       }
 
-      const { error } = await supabase
-        .from('shifts')
-        .insert(shifts as any);
+      const { error } = await supabase.from('shifts').insert(shifts);
 
       if (error) throw error;
 

@@ -1,5 +1,5 @@
--- Hammonia Taxi Shift Planner Database Schema
--- Run this SQL in your Supabase SQL Editor
+-- Hammonia Taxi Shift Planner Database Schema V2
+-- This version includes proper auth sync and additional constraints
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -28,7 +28,7 @@ CREATE TABLE taxis (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Create shifts table
+-- Create shifts table with enhanced constraints
 CREATE TABLE shifts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   driver_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -47,26 +47,35 @@ CREATE TABLE shifts (
   )
 );
 
--- Create index for faster queries
+-- Create indexes for faster queries
 CREATE INDEX idx_shifts_driver_id ON shifts(driver_id);
 CREATE INDEX idx_shifts_taxi_id ON shifts(taxi_id);
 CREATE INDEX idx_shifts_start_time ON shifts(start_time);
 CREATE INDEX idx_shifts_end_time ON shifts(end_time);
+CREATE INDEX idx_shifts_driver_time ON shifts(driver_id, start_time, end_time);
 
--- Create a function to check for overlapping shifts
+-- Enhanced function to check for overlapping shifts (both taxi AND driver conflicts)
 CREATE OR REPLACE FUNCTION check_shift_overlap()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- Check if there's any overlap with existing shifts for the same taxi
+  -- Check if taxi is already booked for this time
   IF EXISTS (
     SELECT 1 FROM shifts
     WHERE taxi_id = NEW.taxi_id
     AND id != COALESCE(NEW.id, uuid_generate_v4())
-    AND (
-      (NEW.start_time, NEW.end_time) OVERLAPS (start_time, end_time)
-    )
+    AND (NEW.start_time, NEW.end_time) OVERLAPS (start_time, end_time)
   ) THEN
-    RAISE EXCEPTION 'Shift overlaps with existing booking for this taxi';
+    RAISE EXCEPTION 'Taxi is already booked for this time period';
+  END IF;
+  
+  -- Check if driver already has a shift at this time (prevent double booking)
+  IF EXISTS (
+    SELECT 1 FROM shifts
+    WHERE driver_id = NEW.driver_id
+    AND id != COALESCE(NEW.id, uuid_generate_v4())
+    AND (NEW.start_time, NEW.end_time) OVERLAPS (start_time, end_time)
+  ) THEN
+    RAISE EXCEPTION 'Driver already has a shift scheduled for this time period';
   END IF;
   
   RETURN NEW;
@@ -79,7 +88,7 @@ CREATE TRIGGER prevent_shift_overlap
   FOR EACH ROW
   EXECUTE FUNCTION check_shift_overlap();
 
--- Create function to automatically update updated_at timestamp
+-- Function to automatically update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -97,6 +106,50 @@ CREATE TRIGGER update_taxis_updated_at BEFORE UPDATE ON taxis
 
 CREATE TRIGGER update_shifts_updated_at BEFORE UPDATE ON shifts
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Function to handle auth user deletion (deletes from auth when profile is deleted)
+CREATE OR REPLACE FUNCTION handle_profile_deletion()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Delete the user from auth.users (this will cascade delete the profile)
+  DELETE FROM auth.users WHERE id = OLD.id;
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Function to handle new user signup (creates profile)
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Only create profile if metadata contains profile info
+  IF NEW.raw_user_meta_data->>'first_name' IS NOT NULL THEN
+    INSERT INTO public.profiles (
+      id,
+      email,
+      first_name,
+      last_name,
+      employee_type,
+      is_admin
+    ) VALUES (
+      NEW.id,
+      NEW.email,
+      NEW.raw_user_meta_data->>'first_name',
+      NEW.raw_user_meta_data->>'last_name',
+      COALESCE(
+        (NEW.raw_user_meta_data->>'employee_type')::employee_type,
+        'Vollzeit Mitarbeiter'
+      ),
+      COALESCE((NEW.raw_user_meta_data->>'is_admin')::boolean, false)
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger to create profile on user signup
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
 
 -- Enable Row Level Security
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -217,51 +270,12 @@ CREATE POLICY "Drivers delete own shifts, admins delete any" ON shifts
     )
   );
 
--- Function to handle new user signup (creates profile)
-CREATE OR REPLACE FUNCTION handle_new_user()
-RETURNS TRIGGER AS $$
-BEGIN
-  -- Only create profile if metadata contains profile info
-  IF NEW.raw_user_meta_data->>'first_name' IS NOT NULL THEN
-    INSERT INTO public.profiles (
-      id,
-      email,
-      first_name,
-      last_name,
-      employee_type,
-      is_admin
-    ) VALUES (
-      NEW.id,
-      NEW.email,
-      NEW.raw_user_meta_data->>'first_name',
-      NEW.raw_user_meta_data->>'last_name',
-      COALESCE(
-        (NEW.raw_user_meta_data->>'employee_type')::employee_type,
-        'Vollzeit Mitarbeiter'
-      ),
-      COALESCE((NEW.raw_user_meta_data->>'is_admin')::boolean, false)
-    );
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Trigger to create profile on user signup
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
-
--- Insert sample data (optional - uncomment to use)
+-- Add sample taxis (optional)
 /*
--- Insert sample taxis
-INSERT INTO taxis (license_plate) VALUES 
-  ('HH-QQ 705'),
-  ('HH-QQ 706'),
-  ('HH-QQ 707'),
-  ('HH-QQ 708'),
-  ('HH-QQ 709');
-
--- To create an admin user, use Supabase Auth API or dashboard
--- Then update their profile:
--- UPDATE profiles SET is_admin = TRUE WHERE email = 'admin@hammonia-taxi.de';
+INSERT INTO taxis (license_plate, is_active) VALUES 
+  ('HH-QQ 701', true),
+  ('HH-QQ 702', true),
+  ('HH-QQ 703', true),
+  ('HH-QQ 704', true),
+  ('HH-QQ 705', true);
 */

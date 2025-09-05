@@ -4,64 +4,71 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
-  Paper,
-  Typography,
   Button,
+  Card,
+  CardContent,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  IconButton,
+  Paper,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  IconButton,
-  Chip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   TextField,
+  Typography,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
-  Avatar,
+  Chip,
   Tooltip,
-  InputAdornment,
   Alert,
-  TablePagination,
-  CircularProgress,
 } from '@mui/material';
 import {
   Add,
   Edit,
   Delete,
-  Person,
   Email,
-  Search,
-  Visibility,
-  VisibilityOff,
-  Send,
+  PersonAdd,
+  Warning,
+  Check,
 } from '@mui/icons-material';
-import { enqueueSnackbar } from 'notistack';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import DashboardLayout from '@/components/DashboardLayout';
-import { supabase } from '@/lib/supabase/client';
+import { driverService } from '@/services/driverService';
 import { Profile, EmployeeType } from '@/lib/supabase/database.types';
+import { enqueueSnackbar } from 'notistack';
+
+interface DriverFormData {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  employeeType: EmployeeType;
+}
 
 function AdminDriversContent() {
   const { t } = useTranslation();
   const [drivers, setDrivers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [currentDriver, setCurrentDriver] = useState<Partial<Profile> | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
-  const [showPassword, setShowPassword] = useState(false);
-  const [tempPassword, setTempPassword] = useState('');
-
-  const employeeTypes: EmployeeType[] = ['Vollzeit Mitarbeiter', 'Aushilfe', 'Sonstiges'];
+  const [openDialog, setOpenDialog] = useState(false);
+  const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
+  const [selectedDriver, setSelectedDriver] = useState<Profile | null>(null);
+  const [driverToDelete, setDriverToDelete] = useState<Profile | null>(null);
+  const [formData, setFormData] = useState<DriverFormData>({
+    email: '',
+    password: '',
+    firstName: '',
+    lastName: '',
+    employeeType: 'Vollzeit Mitarbeiter',
+  });
+  const [formErrors, setFormErrors] = useState<Partial<DriverFormData>>({});
 
   useEffect(() => {
     fetchDrivers();
@@ -69,13 +76,9 @@ function AdminDriversContent() {
 
   const fetchDrivers = async () => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setDrivers(data || []);
+      setLoading(true);
+      const data = await driverService.getDrivers();
+      setDrivers(data);
     } catch (error) {
       console.error('Error fetching drivers:', error);
       enqueueSnackbar(t('errors.generic'), { variant: 'error' });
@@ -84,87 +87,82 @@ function AdminDriversContent() {
     }
   };
 
-  const handleOpenDialog = (driver?: Profile) => {
-    if (driver) {
-      setCurrentDriver(driver);
-      setTempPassword('');
-    } else {
-      setCurrentDriver({
-        first_name: '',
-        last_name: '',
-        email: '',
-        employee_type: 'Vollzeit Mitarbeiter',
-        is_admin: false,
-      });
-      setTempPassword('');
+  const validateForm = (): boolean => {
+    const errors: Partial<DriverFormData> = {};
+    
+    if (!formData.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      errors.email = 'Invalid email address';
     }
-    setDialogOpen(true);
+    
+    if (!selectedDriver && (!formData.password || formData.password.length < 6)) {
+      errors.password = 'Password must be at least 6 characters';
+    }
+    
+    if (!formData.firstName) {
+      errors.firstName = 'First name is required';
+    }
+    
+    if (!formData.lastName) {
+      errors.lastName = 'Last name is required';
+    }
+    
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
-  const handleCloseDialog = () => {
-    setDialogOpen(false);
-    setCurrentDriver(null);
-    setTempPassword('');
-    setShowPassword(false);
+  const handleCreateDriver = () => {
+    setSelectedDriver(null);
+    setFormData({
+      email: '',
+      password: '',
+      firstName: '',
+      lastName: '',
+      employeeType: 'Vollzeit Mitarbeiter',
+    });
+    setFormErrors({});
+    setOpenDialog(true);
   };
 
-  const handleSaveDriver = async () => {
-    if (!currentDriver) return;
+  const handleEditDriver = (driver: Profile) => {
+    setSelectedDriver(driver);
+    setFormData({
+      email: driver.email,
+      password: '', // Don't populate password for edits
+      firstName: driver.first_name,
+      lastName: driver.last_name,
+      employeeType: driver.employee_type,
+    });
+    setFormErrors({});
+    setOpenDialog(true);
+  };
+
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
 
     try {
-      if (currentDriver.id) {
+      if (selectedDriver) {
         // Update existing driver
-        const { error } = await supabase
-          .from('profiles')
-          .update({
-            first_name: currentDriver.first_name,
-            last_name: currentDriver.last_name,
-            email: currentDriver.email,
-            employee_type: currentDriver.employee_type,
-            is_admin: currentDriver.is_admin,
-          })
-          .eq('id', currentDriver.id);
-
-        if (error) throw error;
-        
+        await driverService.updateDriver(selectedDriver.id, {
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          employeeType: formData.employeeType,
+          email: formData.email,
+        });
         enqueueSnackbar(t('drivers.updateSuccess'), { variant: 'success' });
       } else {
-        // First, create the auth user without metadata (to avoid trigger issues)
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email: currentDriver.email!,
-          password: tempPassword,
+        // Create new driver
+        await driverService.createDriver({
+          email: formData.email,
+          password: formData.password,
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          employeeType: formData.employeeType,
         });
-
-        if (authError) throw authError;
-
-        if (authData.user) {
-          // Then create or update the profile directly
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .upsert({
-              id: authData.user.id,
-              email: currentDriver.email!,
-              first_name: currentDriver.first_name!,
-              last_name: currentDriver.last_name!,
-              employee_type: currentDriver.employee_type || 'Vollzeit Mitarbeiter',
-              is_admin: currentDriver.is_admin || false,
-            });
-
-          if (profileError) {
-            // If profile creation fails, try to clean up the auth user
-            console.error('Profile creation error:', profileError);
-            // Note: We can't delete the user from client-side, would need admin API
-            throw profileError;
-          }
-
-          enqueueSnackbar(t('drivers.createSuccess'), { variant: 'success' });
-          
-          // In production, send welcome email with credentials
-          enqueueSnackbar(t('drivers.emailSent'), { variant: 'info' });
-        }
+        enqueueSnackbar(t('drivers.createSuccess'), { variant: 'success' });
+        enqueueSnackbar(t('drivers.emailSent'), { variant: 'info' });
       }
-
-      handleCloseDialog();
+      
+      setOpenDialog(false);
       fetchDrivers();
     } catch (error: any) {
       console.error('Error saving driver:', error);
@@ -172,47 +170,31 @@ function AdminDriversContent() {
     }
   };
 
-  const handleDeleteDriver = async () => {
-    if (!currentDriver?.id) return;
+  const handleDeleteClick = (driver: Profile) => {
+    setDriverToDelete(driver);
+    setOpenDeleteDialog(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!driverToDelete) return;
 
     try {
-      // First try to delete the profile (this should cascade to delete shifts)
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', currentDriver.id);
+      // Check if driver has active shifts
+      const hasShifts = await driverService.hasActiveShifts(driverToDelete.id);
       
-      if (profileError) {
-        // If it's a foreign key constraint error, it means there are shifts
-        if (profileError.code === '23503') {
-          // Try deleting shifts first
-          const { error: shiftsError } = await supabase
-            .from('shifts')
-            .delete()
-            .eq('driver_id', currentDriver.id);
-          
-          if (!shiftsError) {
-            // Try deleting profile again
-            const { error: retryError } = await supabase
-              .from('profiles')
-              .delete()
-              .eq('id', currentDriver.id);
-            
-            if (retryError) throw retryError;
-          } else {
-            throw profileError;
-          }
-        } else {
-          throw profileError;
+      if (hasShifts) {
+        const confirmDelete = window.confirm(
+          'This driver has active shifts. Deleting will remove all their shifts. Continue?'
+        );
+        if (!confirmDelete) {
+          setOpenDeleteDialog(false);
+          return;
         }
       }
 
-      // Note: The auth user will remain but won't be able to login without a profile
-      // In production, you'd want to use Edge Functions or server-side code to delete the auth user
-
+      await driverService.deleteDriver(driverToDelete.id);
       enqueueSnackbar(t('drivers.deleteSuccess'), { variant: 'success' });
-      setDeleteDialogOpen(false);
-      setCurrentDriver(null);
+      setOpenDeleteDialog(false);
       fetchDrivers();
     } catch (error: any) {
       console.error('Error deleting driver:', error);
@@ -220,247 +202,199 @@ function AdminDriversContent() {
     }
   };
 
-  const filteredDrivers = drivers.filter(driver =>
-    driver.first_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    driver.last_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    driver.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const paginatedDrivers = filteredDrivers.slice(
-    page * rowsPerPage,
-    page * rowsPerPage + rowsPerPage
-  );
-
-  const handleChangePage = (event: unknown, newPage: number) => {
-    setPage(newPage);
+  const handleResetPassword = async (driver: Profile) => {
+    try {
+      await driverService.resetDriverPassword(driver.email);
+      enqueueSnackbar(t('auth.passwordResetSent'), { variant: 'success' });
+    } catch (error: any) {
+      console.error('Error resetting password:', error);
+      enqueueSnackbar(error.message || t('errors.generic'), { variant: 'error' });
+    }
   };
 
-  const handleChangeRowsPerPage = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setRowsPerPage(parseInt(event.target.value, 10));
-    setPage(0);
+  const getEmployeeTypeLabel = (type: EmployeeType) => {
+    switch (type) {
+      case 'Vollzeit Mitarbeiter':
+        return t('drivers.fullTime');
+      case 'Aushilfe':
+        return t('drivers.partTime');
+      case 'Sonstiges':
+        return t('drivers.other');
+      default:
+        return type;
+    }
   };
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant="h4">
           {t('drivers.manageDrivers')}
         </Typography>
         <Button
           variant="contained"
-          startIcon={<Add />}
-          onClick={() => handleOpenDialog()}
+          startIcon={<PersonAdd />}
+          onClick={handleCreateDriver}
         >
           {t('drivers.addDriver')}
         </Button>
       </Box>
 
-      <Paper>
-        <Box sx={{ p: 2 }}>
-          <TextField
-            fullWidth
-            variant="outlined"
-            placeholder={t('common.search')}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <Search />
-                </InputAdornment>
-              ),
-            }}
-          />
-        </Box>
-
-        <TableContainer>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>{t('common.fullName')}</TableCell>
-                <TableCell>{t('common.email')}</TableCell>
-                <TableCell>{t('drivers.employeeType')}</TableCell>
-                <TableCell align="center">{t('navigation.admin')}</TableCell>
-                <TableCell align="right">{t('common.actions')}</TableCell>
+      <TableContainer component={Paper}>
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableCell>{t('common.fullName')}</TableCell>
+              <TableCell>{t('common.email')}</TableCell>
+              <TableCell>{t('drivers.employeeType')}</TableCell>
+              <TableCell align="right">{t('common.actions')}</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {drivers.map((driver) => (
+              <TableRow key={driver.id}>
+                <TableCell>
+                  {driver.first_name} {driver.last_name}
+                </TableCell>
+                <TableCell>{driver.email}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={getEmployeeTypeLabel(driver.employee_type)}
+                    size="small"
+                    color={driver.employee_type === 'Vollzeit Mitarbeiter' ? 'primary' : 'default'}
+                  />
+                </TableCell>
+                <TableCell align="right">
+                  <Tooltip title={t('auth.resetPassword')}>
+                    <IconButton
+                      size="small"
+                      onClick={() => handleResetPassword(driver)}
+                    >
+                      <Email />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title={t('common.edit')}>
+                    <IconButton
+                      size="small"
+                      onClick={() => handleEditDriver(driver)}
+                    >
+                      <Edit />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title={t('common.delete')}>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => handleDeleteClick(driver)}
+                    >
+                      <Delete />
+                    </IconButton>
+                  </Tooltip>
+                </TableCell>
               </TableRow>
-            </TableHead>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={5} align="center">
-                    <CircularProgress />
-                  </TableCell>
-                </TableRow>
-              ) : paginatedDrivers.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} align="center">
-                    <Typography color="text.secondary">
-                      {t('drivers.noDrivers')}
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                paginatedDrivers.map((driver) => (
-                  <TableRow key={driver.id}>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Avatar sx={{ width: 32, height: 32 }}>
-                          {driver.first_name[0]}{driver.last_name[0]}
-                        </Avatar>
-                        {driver.first_name} {driver.last_name}
-                      </Box>
-                    </TableCell>
-                    <TableCell>{driver.email}</TableCell>
-                    <TableCell>
-                      <Chip
-                        label={driver.employee_type}
-                        size="small"
-                        color={driver.employee_type === 'Vollzeit Mitarbeiter' ? 'primary' : 'default'}
-                      />
-                    </TableCell>
-                    <TableCell align="center">
-                      {driver.is_admin && (
-                        <Chip label="Admin" size="small" color="success" />
-                      )}
-                    </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title={t('common.edit')}>
-                        <IconButton size="small" onClick={() => handleOpenDialog(driver)}>
-                          <Edit />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title={t('common.delete')}>
-                        <IconButton
-                          size="small"
-                          onClick={() => {
-                            setCurrentDriver(driver);
-                            setDeleteDialogOpen(true);
-                          }}
-                        >
-                          <Delete />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
 
-        <TablePagination
-          rowsPerPageOptions={[5, 10, 25]}
-          component="div"
-          count={filteredDrivers.length}
-          rowsPerPage={rowsPerPage}
-          page={page}
-          onPageChange={handleChangePage}
-          onRowsPerPageChange={handleChangeRowsPerPage}
-        />
-      </Paper>
-
-      {/* Add/Edit Driver Dialog */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
+      {/* Create/Edit Dialog */}
+      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
         <DialogTitle>
-          {currentDriver?.id ? t('drivers.editDriver') : t('drivers.addDriver')}
+          {selectedDriver ? t('drivers.editDriver') : t('drivers.addDriver')}
         </DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
             <TextField
-              label={t('common.firstName')}
-              value={currentDriver?.first_name || ''}
-              onChange={(e) => setCurrentDriver({ ...currentDriver, first_name: e.target.value })}
-              fullWidth
-              required
-            />
-            <TextField
-              label={t('common.lastName')}
-              value={currentDriver?.last_name || ''}
-              onChange={(e) => setCurrentDriver({ ...currentDriver, last_name: e.target.value })}
-              fullWidth
-              required
-            />
-            <TextField
               label={t('common.email')}
               type="email"
-              value={currentDriver?.email || ''}
-              onChange={(e) => setCurrentDriver({ ...currentDriver, email: e.target.value })}
+              value={formData.email}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              error={!!formErrors.email}
+              helperText={formErrors.email}
               fullWidth
               required
-              disabled={!!currentDriver?.id}
             />
-            {!currentDriver?.id && (
+            
+            {!selectedDriver && (
               <TextField
                 label={t('common.password')}
-                type={showPassword ? 'text' : 'password'}
-                value={tempPassword}
-                onChange={(e) => setTempPassword(e.target.value)}
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                error={!!formErrors.password}
+                helperText={formErrors.password || 'Min. 6 characters'}
                 fullWidth
                 required
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
-                        {showPassword ? <VisibilityOff /> : <Visibility />}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
               />
             )}
+            
+            <TextField
+              label={t('common.firstName')}
+              value={formData.firstName}
+              onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+              error={!!formErrors.firstName}
+              helperText={formErrors.firstName}
+              fullWidth
+              required
+            />
+            
+            <TextField
+              label={t('common.lastName')}
+              value={formData.lastName}
+              onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+              error={!!formErrors.lastName}
+              helperText={formErrors.lastName}
+              fullWidth
+              required
+            />
+            
             <FormControl fullWidth>
               <InputLabel>{t('drivers.employeeType')}</InputLabel>
               <Select
-                value={currentDriver?.employee_type || 'Vollzeit Mitarbeiter'}
-                onChange={(e) => setCurrentDriver({ ...currentDriver, employee_type: e.target.value as EmployeeType })}
+                value={formData.employeeType}
+                onChange={(e) => setFormData({ ...formData, employeeType: e.target.value as EmployeeType })}
+                label={t('drivers.employeeType')}
               >
-                {employeeTypes.map((type) => (
-                  <MenuItem key={type} value={type}>
-                    {type}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>{t('navigation.admin')}</InputLabel>
-              <Select
-                value={currentDriver?.is_admin ? 'true' : 'false'}
-                onChange={(e) => setCurrentDriver({ ...currentDriver, is_admin: e.target.value === 'true' })}
-              >
-                <MenuItem value="false">{t('common.no')}</MenuItem>
-                <MenuItem value="true">{t('common.yes')}</MenuItem>
+                <MenuItem value="Vollzeit Mitarbeiter">{t('drivers.fullTime')}</MenuItem>
+                <MenuItem value="Aushilfe">{t('drivers.partTime')}</MenuItem>
+                <MenuItem value="Sonstiges">{t('drivers.other')}</MenuItem>
               </Select>
             </FormControl>
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialog}>{t('common.cancel')}</Button>
-          <Button
-            onClick={handleSaveDriver}
-            variant="contained"
-            disabled={
-              !currentDriver?.first_name ||
-              !currentDriver?.last_name ||
-              !currentDriver?.email ||
-              (!currentDriver?.id && !tempPassword)
-            }
-          >
+          <Button onClick={() => setOpenDialog(false)}>
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={handleSubmit} variant="contained">
             {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>{t('drivers.deleteDriver')}</DialogTitle>
+      <Dialog open={openDeleteDialog} onClose={() => setOpenDeleteDialog(false)}>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Warning color="error" />
+            {t('drivers.deleteDriver')}
+          </Box>
+        </DialogTitle>
         <DialogContent>
-          <Alert severity="warning">
+          <DialogContentText>
             {t('drivers.confirmDelete')}
-          </Alert>
+          </DialogContentText>
+          {driverToDelete && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              {driverToDelete.first_name} {driverToDelete.last_name} ({driverToDelete.email})
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>{t('common.cancel')}</Button>
-          <Button onClick={handleDeleteDriver} color="error" variant="contained">
+          <Button onClick={() => setOpenDeleteDialog(false)}>
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={handleDeleteConfirm} color="error" variant="contained">
             {t('common.delete')}
           </Button>
         </DialogActions>
