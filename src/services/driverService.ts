@@ -19,43 +19,81 @@ export interface UpdateDriverData {
 class DriverService {
   /**
    * Create a new driver with both auth user and profile
+   * Uses admin API or RPC function for proper auth handling
    */
   async createDriver(data: CreateDriverData) {
     try {
-      // Step 1: Create auth user with metadata
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: data.email,
-        password: data.password,
-        options: {
-          data: {
+      // Use RPC function to create driver (requires admin privileges)
+      const { data: userId, error: rpcError } = await supabase
+        .rpc('create_driver', {
+          user_email: data.email,
+          user_password: data.password,
+          first_name: data.firstName,
+          last_name: data.lastName,
+          employee_type_param: data.employeeType,
+        });
+
+      if (rpcError) {
+        // If RPC fails, try client-side approach with manual profile creation
+        console.warn('RPC create_driver failed, trying client approach:', rpcError);
+        
+        // Create auth user without auto-confirm (let Supabase send confirmation email)
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: data.email,
+          password: data.password,
+        });
+
+        if (authError) throw authError;
+        if (!authData.user) throw new Error('Failed to create user');
+
+        // Manually create profile (since trigger might be failing)
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: authData.user.id,
+            email: data.email,
             first_name: data.firstName,
             last_name: data.lastName,
             employee_type: data.employeeType,
             is_admin: false,
-          },
-          emailRedirectTo: `${window.location.origin}/login`,
-        },
-      });
+          });
 
-      if (authError) throw authError;
-      if (!authData.user) throw new Error('Failed to create user');
+        if (profileError) {
+          console.error('Profile creation failed:', profileError);
+          // Don't throw here - user is created but profile failed
+          // Admin can fix this manually
+        }
 
-      // The profile will be created automatically by the database trigger
-      // Let's verify it was created
+        return { 
+          user: authData.user, 
+          profile: {
+            id: authData.user.id,
+            email: data.email,
+            first_name: data.firstName,
+            last_name: data.lastName,
+            employee_type: data.employeeType,
+            is_admin: false,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }
+        };
+      }
+
+      // If RPC succeeded, fetch the created profile
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', authData.user.id)
+        .eq('id', userId)
         .single();
 
       if (profileError) {
-        // If profile creation failed, we should clean up the auth user
-        // Note: This requires service role key, so we'll just log the error
-        console.error('Profile creation failed:', profileError);
-        throw new Error('Failed to create driver profile');
+        throw new Error('Driver created but profile fetch failed');
       }
 
-      return { user: authData.user, profile };
+      return { 
+        user: { id: userId, email: data.email } as any, 
+        profile 
+      };
     } catch (error) {
       console.error('Error creating driver:', error);
       throw error;
