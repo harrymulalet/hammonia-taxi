@@ -131,14 +131,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
 
       if (data.user) {
-        await fetchProfile(data.user.id);
-        enqueueSnackbar('Login successful', { variant: 'success' });
-        
-        // Redirect based on role
-        if (profile?.is_admin) {
-          router.push('/admin/dashboard');
-        } else {
-          router.push('/driver/dashboard');
+        // Fetch profile immediately after sign in
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', data.user.id)
+          .single();
+
+        if (!profileError && profileData) {
+          setProfile(profileData);
+          enqueueSnackbar('Login successful', { variant: 'success' });
+          
+          // Redirect based on role
+          if (profileData.is_admin) {
+            router.push('/admin/dashboard');
+          } else {
+            router.push('/driver/dashboard');
+          }
         }
       }
     } catch (error: any) {
