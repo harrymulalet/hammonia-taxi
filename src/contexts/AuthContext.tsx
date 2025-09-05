@@ -44,32 +44,86 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    let mounted = true;
+
     // Check active session
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        fetchProfile(session.user.id);
+      if (mounted) {
+        setSession(session);
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          fetchProfile(session.user.id);
+        }
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        await fetchProfile(session.user.id);
-      } else {
-        setProfile(null);
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (mounted) {
+        console.log('Auth state changed:', event);
+        
+        // Handle different auth events
+        if (event === 'SIGNED_IN') {
+          setSession(session);
+          setUser(session?.user ?? null);
+          if (session?.user) {
+            await fetchProfile(session.user.id);
+          }
+        } else if (event === 'SIGNED_OUT') {
+          setSession(null);
+          setUser(null);
+          setProfile(null);
+          router.push('/login');
+        } else if (event === 'TOKEN_REFRESHED') {
+          setSession(session);
+          setUser(session?.user ?? null);
+        } else if (event === 'USER_UPDATED') {
+          setSession(session);
+          setUser(session?.user ?? null);
+          if (session?.user) {
+            await fetchProfile(session.user.id);
+          }
+        }
+        
+        setLoading(false);
       }
-      setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    // Set up session refresh interval
+    const refreshInterval = setInterval(async () => {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) {
+        console.error('Session refresh error:', error);
+        // If session expired, redirect to login
+        if (error.message.includes('refresh_token') || error.message.includes('expired')) {
+          router.push('/login');
+        }
+      } else if (session) {
+        // Refresh the session if it's about to expire
+        const expiresAt = session.expires_at;
+        if (expiresAt) {
+          const expiresIn = expiresAt * 1000 - Date.now();
+          // Refresh if less than 5 minutes remaining
+          if (expiresIn < 5 * 60 * 1000) {
+            const { data, error } = await supabase.auth.refreshSession();
+            if (!error && data.session) {
+              setSession(data.session);
+              setUser(data.session.user);
+            }
+          }
+        }
+      }
+    }, 60000); // Check every minute
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+      clearInterval(refreshInterval);
+    };
+  }, [router]);
 
   const signIn = async (email: string, password: string) => {
     try {

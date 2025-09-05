@@ -353,7 +353,14 @@ function BookShiftContent() {
           {conflicts.length > 0 && (
             <Grid item xs={12}>
               <Alert severity="warning" icon={<Warning />}>
-                {t('shifts.conflictError')} on: {conflicts.join(', ')}
+                <Typography variant="subtitle2" gutterBottom>
+                  {t('shifts.taxiAlreadyBooked')}:
+                </Typography>
+                {conflicts.map((conflict, index) => (
+                  <Typography key={index} variant="body2">
+                    • {conflict.date}: {t('shifts.bookedBy')} {conflict.driver} ({conflict.times})
+                  </Typography>
+                ))}
               </Alert>
             </Grid>
           )}
