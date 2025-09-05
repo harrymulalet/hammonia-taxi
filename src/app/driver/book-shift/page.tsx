@@ -50,7 +50,7 @@ function BookShiftContent() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [endTime, setEndTime] = useState<Date | null>(null);
-  const [multipleDay  s, setMultipleDays] = useState(false);
+  const [multipleDays, setMultipleDays] = useState(false);
   const [selectedDates, setSelectedDates] = useState<Date[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [validationError, setValidationError] = useState('');
