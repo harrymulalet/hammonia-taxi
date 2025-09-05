@@ -35,82 +35,134 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .eq('id', userId)
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error fetching profile:', error);
+        setProfile(null);
+        return null;
+      }
+      
       setProfile(data);
+      return data;
     } catch (error) {
       console.error('Error fetching profile:', error);
       setProfile(null);
+      return null;
     }
   };
 
   useEffect(() => {
     let mounted = true;
 
-    // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (mounted) {
-        setSession(session);
-        setUser(session?.user ?? null);
+    const initializeAuth = async () => {
+      try {
+        // Check active session
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (!mounted) return;
+
         if (session?.user) {
-          fetchProfile(session.user.id);
+          setSession(session);
+          setUser(session.user);
+          await fetchProfile(session.user.id);
+        } else {
+          setSession(null);
+          setUser(null);
+          setProfile(null);
         }
-        setLoading(false);
+      } catch (error) {
+        console.error('Error initializing auth:', error);
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
       }
-    });
+    };
+
+    initializeAuth();
 
     // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (mounted) {
-        console.log('Auth state changed:', event);
-        
-        // Handle different auth events
-        if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
-          setSession(session);
-          setUser(session?.user ?? null);
+      if (!mounted) return;
+      
+      console.log('Auth state changed:', event);
+      
+      switch (event) {
+        case 'SIGNED_IN':
           if (session?.user) {
-            await fetchProfile(session.user.id);
-            // Force a data refresh after signin
-            window.location.reload();
+            setSession(session);
+            setUser(session.user);
+            const profileData = await fetchProfile(session.user.id);
+            
+            // Only navigate if we're still on the login page
+            if (window.location.pathname === '/login' && profileData) {
+              if (profileData.is_admin) {
+                router.push('/admin/dashboard');
+              } else {
+                router.push('/driver/dashboard');
+              }
+            }
           }
-        } else if (event === 'SIGNED_OUT') {
+          break;
+          
+        case 'SIGNED_OUT':
           setSession(null);
           setUser(null);
           setProfile(null);
-          router.push('/login');
-        } else if (event === 'TOKEN_REFRESHED') {
-          setSession(session);
-          setUser(session?.user ?? null);
-        }
-        
-        setLoading(false);
+          if (window.location.pathname !== '/login') {
+            router.push('/login');
+          }
+          break;
+          
+        case 'TOKEN_REFRESHED':
+        case 'USER_UPDATED':
+          if (session?.user) {
+            setSession(session);
+            setUser(session.user);
+            await fetchProfile(session.user.id);
+          }
+          break;
       }
+      
+      setLoading(false);
     });
 
     // Set up session refresh interval
     const refreshInterval = setInterval(async () => {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      if (error) {
-        console.error('Session refresh error:', error);
-        // If session expired, redirect to login
-        if (error.message.includes('refresh_token') || error.message.includes('expired')) {
-          router.push('/login');
-        }
-      } else if (session) {
-        // Refresh the session if it's about to expire
-        const expiresAt = session.expires_at;
-        if (expiresAt) {
-          const expiresIn = expiresAt * 1000 - Date.now();
-          // Refresh if less than 5 minutes remaining
-          if (expiresIn < 5 * 60 * 1000) {
-            const { data, error } = await supabase.auth.refreshSession();
-            if (!error && data.session) {
-              setSession(data.session);
-              setUser(data.session.user);
+      if (!mounted) return;
+      
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error('Session refresh error:', error);
+          // If session expired, clear state and redirect to login
+          if (error.message?.includes('refresh_token') || error.message?.includes('expired')) {
+            setSession(null);
+            setUser(null);
+            setProfile(null);
+            if (window.location.pathname !== '/login') {
+              router.push('/login');
+            }
+          }
+        } else if (session) {
+          // Refresh the session if it's about to expire
+          const expiresAt = session.expires_at;
+          if (expiresAt) {
+            const expiresIn = expiresAt * 1000 - Date.now();
+            // Refresh if less than 5 minutes remaining
+            if (expiresIn < 5 * 60 * 1000) {
+              const { data, error } = await supabase.auth.refreshSession();
+              if (!error && data.session) {
+                setSession(data.session);
+                setUser(data.session.user);
+              }
             }
           }
         }
+      } catch (error) {
+        console.error('Error in refresh interval:', error);
       }
     }, 60000); // Check every minute
 
@@ -123,53 +175,78 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     try {
+      setLoading(true);
+      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
-      if (error) throw error;
-
-      if (data.user) {
-        // Fetch profile immediately after sign in
-        const { data: profileData, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
-
-        if (!profileError && profileData) {
-          setProfile(profileData);
-          enqueueSnackbar('Login successful', { variant: 'success' });
-          
-          // Redirect based on role
-          if (profileData.is_admin) {
-            router.push('/admin/dashboard');
-          } else {
-            router.push('/driver/dashboard');
-          }
-        }
+      if (error) {
+        throw error;
       }
+
+      if (!data.user) {
+        throw new Error('No user returned from sign in');
+      }
+
+      // Set session and user immediately
+      setSession(data.session);
+      setUser(data.user);
+
+      // Fetch profile
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError) {
+        console.error('Profile fetch error:', profileError);
+        throw new Error('Could not fetch user profile');
+      }
+
+      if (!profileData) {
+        throw new Error('No profile found for user');
+      }
+
+      setProfile(profileData);
+      enqueueSnackbar('Login successful', { variant: 'success' });
+      
+      // Navigate based on role
+      setTimeout(() => {
+        if (profileData.is_admin) {
+          router.push('/admin/dashboard');
+        } else {
+          router.push('/driver/dashboard');
+        }
+      }, 100);
+      
     } catch (error: any) {
       console.error('Sign in error:', error);
-      enqueueSnackbar(error.message || 'Login failed', { variant: 'error' });
+      setLoading(false);
       throw error;
     }
   };
 
   const signOut = async () => {
     try {
+      setLoading(true);
+      
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       
       setUser(null);
       setProfile(null);
       setSession(null);
+      
       enqueueSnackbar('Logged out successfully', { variant: 'info' });
       router.push('/login');
     } catch (error: any) {
       console.error('Sign out error:', error);
       enqueueSnackbar(error.message || 'Logout failed', { variant: 'error' });
+    } finally {
+      setLoading(false);
     }
   };
 
