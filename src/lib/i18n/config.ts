@@ -117,6 +117,13 @@ const resources = {
         from: 'From',
         to: 'To',
         overnight: 'Overnight shift',
+        driverConflict: 'You already have shifts scheduled on',
+        taxiAlreadyBooked: 'Taxi is already booked',
+        bookedBy: 'Booked by',
+        availabilityInfo: 'Here you can see all booked shifts. Green marked shifts are your own.',
+        allShifts: 'All Shifts',
+        calendarView: 'Calendar View',
+        listView: 'List View',
       },
       analytics: {
         title: 'Analytics',

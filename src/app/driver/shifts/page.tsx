@@ -2,124 +2,138 @@
 
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useRouter } from 'next/navigation';
 import {
   Box,
   Paper,
   Typography,
-  Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  IconButton,
+  ToggleButton,
+  ToggleButtonGroup,
+  Grid,
+  Card,
+  CardContent,
   Chip,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemAvatar,
+  Avatar,
+  IconButton,
+  Tooltip,
+  Tab,
+  Tabs,
+  Alert,
+  Button,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  Alert,
-  Tooltip,
-  Tabs,
-  Tab,
-  CircularProgress,
-  Card,
-  CardContent,
-  Grid,
 } from '@mui/material';
 import {
+  CalendarMonth,
+  ViewList,
+  DirectionsCar,
+  Person,
   Edit,
   Delete,
-  DirectionsCar,
   Schedule,
-  AddCircle,
-  EventNote,
-  AccessTime,
-  CalendarMonth,
+  Info,
+  Visibility,
 } from '@mui/icons-material';
-import { format, parseISO, isFuture, isPast, isToday, differenceInHours, startOfWeek, endOfWeek } from 'date-fns';
-import { enqueueSnackbar } from 'notistack';
+import { 
+  format, 
+  parseISO, 
+  startOfWeek, 
+  endOfWeek, 
+  eachDayOfInterval,
+  isSameDay,
+  isToday,
+  isFuture,
+  isPast,
+  startOfMonth,
+  endOfMonth,
+} from 'date-fns';
+import { de, enUS } from 'date-fns/locale';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import DashboardLayout from '@/components/DashboardLayout';
 import { supabase } from '@/lib/supabase/client';
-import { ShiftWithDetails } from '@/lib/supabase/database.types';
 import { useAuth } from '@/contexts/AuthContext';
+import { ShiftWithDetails } from '@/lib/supabase/database.types';
+import { enqueueSnackbar } from 'notistack';
+import { useRouter } from 'next/navigation';
+
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+function TabPanel(props: TabPanelProps) {
+  const { children, value, index, ...other } = props;
+  return (
+    <div hidden={value !== index} {...other}>
+      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
+    </div>
+  );
+}
 
 function DriverShiftsContent() {
-  const { t } = useTranslation();
-  const router = useRouter();
+  const { t, i18n } = useTranslation();
   const { user } = useAuth();
-  const [shifts, setShifts] = useState<ShiftWithDetails[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [currentShift, setCurrentShift] = useState<ShiftWithDetails | null>(null);
+  const router = useRouter();
   const [tabValue, setTabValue] = useState(0);
-  const [stats, setStats] = useState({
-    totalShifts: 0,
-    upcomingShifts: 0,
-    hoursThisWeek: 0,
-    hoursThisMonth: 0,
-  });
+  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
+  const [myShifts, setMyShifts] = useState<ShiftWithDetails[]>([]);
+  const [allShifts, setAllShifts] = useState<ShiftWithDetails[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedShift, setSelectedShift] = useState<ShiftWithDetails | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const locale = i18n.language === 'de' ? de : enUS;
 
   useEffect(() => {
     if (user) {
       fetchShifts();
     }
-  }, [user]);
+  }, [user, selectedDate]);
 
   const fetchShifts = async () => {
     if (!user) return;
-
+    
     try {
-      const { data, error } = await supabase
+      setLoading(true);
+      
+      // Fetch user's own shifts
+      const { data: userShifts, error: userError } = await supabase
         .from('shifts')
         .select(`
           *,
-          taxi:taxis(*)
+          taxi:taxis(*),
+          driver:profiles(*)
         `)
         .eq('driver_id', user.id)
-        .order('start_time', { ascending: false });
+        .order('start_time', { ascending: true });
 
-      if (error) throw error;
+      if (userError) throw userError;
 
-      const allShifts = data || [];
-      setShifts(allShifts);
-
-      // Calculate statistics
-      const now = new Date();
-      const weekStart = startOfWeek(now);
-      const weekEnd = endOfWeek(now);
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-
-      const upcomingShifts = allShifts.filter(shift => isFuture(parseISO(shift.start_time)));
+      // Fetch all shifts for availability view
+      const startDate = startOfMonth(selectedDate);
+      const endDate = endOfMonth(selectedDate);
       
-      const weekShifts = allShifts.filter(shift => {
-        const start = parseISO(shift.start_time);
-        return start >= weekStart && start <= weekEnd;
-      });
+      const { data: allShiftsData, error: allError } = await supabase
+        .from('shifts')
+        .select(`
+          *,
+          taxi:taxis(*),
+          driver:profiles(*)
+        `)
+        .gte('start_time', startDate.toISOString())
+        .lte('end_time', endDate.toISOString())
+        .order('start_time', { ascending: true });
 
-      const monthShifts = allShifts.filter(shift => {
-        const start = parseISO(shift.start_time);
-        return start >= monthStart && start <= monthEnd;
-      });
+      if (allError) throw allError;
 
-      const hoursThisWeek = weekShifts.reduce((total, shift) => {
-        return total + differenceInHours(parseISO(shift.end_time), parseISO(shift.start_time));
-      }, 0);
-
-      const hoursThisMonth = monthShifts.reduce((total, shift) => {
-        return total + differenceInHours(parseISO(shift.end_time), parseISO(shift.start_time));
-      }, 0);
-
-      setStats({
-        totalShifts: allShifts.length,
-        upcomingShifts: upcomingShifts.length,
-        hoursThisWeek,
-        hoursThisMonth,
-      });
+      setMyShifts(userShifts || []);
+      setAllShifts(allShiftsData || []);
     } catch (error) {
       console.error('Error fetching shifts:', error);
       enqueueSnackbar(t('errors.generic'), { variant: 'error' });
@@ -129,266 +143,343 @@ function DriverShiftsContent() {
   };
 
   const handleDeleteShift = async () => {
-    if (!currentShift) return;
+    if (!selectedShift) return;
 
     try {
       const { error } = await supabase
         .from('shifts')
         .delete()
-        .eq('id', currentShift.id);
+        .eq('id', selectedShift.id);
 
       if (error) throw error;
 
       enqueueSnackbar(t('shifts.deleteSuccess'), { variant: 'success' });
       setDeleteDialogOpen(false);
-      setCurrentShift(null);
+      setSelectedShift(null);
       fetchShifts();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error deleting shift:', error);
-      enqueueSnackbar(error.message || t('errors.generic'), { variant: 'error' });
+      enqueueSnackbar(t('errors.generic'), { variant: 'error' });
     }
   };
 
-  const getShiftStatus = (shift: ShiftWithDetails) => {
-    const start = parseISO(shift.start_time);
-    const end = parseISO(shift.end_time);
-    const now = new Date();
+  const renderMyShiftsList = () => {
+    const upcomingShifts = myShifts.filter(shift => 
+      isFuture(parseISO(shift.start_time)) || isToday(parseISO(shift.start_time))
+    );
+    const pastShifts = myShifts.filter(shift => 
+      isPast(parseISO(shift.end_time)) && !isToday(parseISO(shift.start_time))
+    );
 
-    if (now >= start && now <= end) return 'ongoing';
-    if (isFuture(start)) return 'upcoming';
-    return 'completed';
+    return (
+      <Box>
+        <Typography variant="h6" gutterBottom>
+          {t('shifts.upcomingShifts')} ({upcomingShifts.length})
+        </Typography>
+        <List>
+          {upcomingShifts.map((shift) => (
+            <Card key={shift.id} sx={{ mb: 2 }}>
+              <CardContent>
+                <Grid container alignItems="center">
+                  <Grid item xs={12} md={3}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <DirectionsCar sx={{ mr: 1 }} />
+                      <Typography variant="h6">
+                        {shift.taxi?.license_plate}
+                      </Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={5}>
+                    <Typography variant="body1">
+                      {format(parseISO(shift.start_time), 'EEEE, dd.MM.yyyy', { locale })}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {format(parseISO(shift.start_time), 'HH:mm')} - 
+                      {format(parseISO(shift.end_time), 'HH:mm')}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} md={4} sx={{ textAlign: 'right' }}>
+                    <Tooltip title={t('common.delete')}>
+                      <IconButton 
+                        color="error"
+                        onClick={() => {
+                          setSelectedShift(shift);
+                          setDeleteDialogOpen(true);
+                        }}
+                      >
+                        <Delete />
+                      </IconButton>
+                    </Tooltip>
+                  </Grid>
+                </Grid>
+              </CardContent>
+            </Card>
+          ))}
+        </List>
+
+        {pastShifts.length > 0 && (
+          <>
+            <Typography variant="h6" gutterBottom sx={{ mt: 4 }}>
+              {t('shifts.pastShifts')} ({pastShifts.length})
+            </Typography>
+            <List>
+              {pastShifts.slice(0, 5).map((shift) => (
+                <Card key={shift.id} sx={{ mb: 1, opacity: 0.7 }}>
+                  <CardContent>
+                    <Grid container alignItems="center">
+                      <Grid item xs={12} md={3}>
+                        <Typography variant="body2">
+                          {shift.taxi?.license_plate}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={12} md={5}>
+                        <Typography variant="body2">
+                          {format(parseISO(shift.start_time), 'dd.MM.yyyy', { locale })}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {format(parseISO(shift.start_time), 'HH:mm')} - 
+                          {format(parseISO(shift.end_time), 'HH:mm')}
+                        </Typography>
+                      </Grid>
+                    </Grid>
+                  </CardContent>
+                </Card>
+              ))}
+            </List>
+          </>
+        )}
+
+        {upcomingShifts.length === 0 && (
+          <Alert severity="info">
+            {t('shifts.noShifts')}
+            <Button 
+              sx={{ ml: 2 }}
+              variant="outlined"
+              size="small"
+              onClick={() => router.push('/driver/book-shift')}
+            >
+              {t('shifts.bookShift')}
+            </Button>
+          </Alert>
+        )}
+      </Box>
+    );
   };
 
-  const upcomingShifts = shifts.filter(shift => isFuture(parseISO(shift.start_time)));
-  const pastShifts = shifts.filter(shift => isPast(parseISO(shift.end_time)));
-  const todaysShifts = shifts.filter(shift => isToday(parseISO(shift.start_time)));
+  const renderCalendarView = () => {
+    const startDate = startOfWeek(selectedDate, { locale });
+    const endDate = endOfWeek(selectedDate, { locale });
+    const days = eachDayOfInterval({ start: startDate, end: endDate });
 
-  const displayedShifts = tabValue === 0 ? upcomingShifts : pastShifts;
+    const getShiftsForDay = (date: Date) => {
+      return myShifts.filter(shift => 
+        isSameDay(parseISO(shift.start_time), date)
+      );
+    };
+
+    return (
+      <Box>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
+          <Typography variant="h6">
+            {format(selectedDate, 'MMMM yyyy', { locale })}
+          </Typography>
+          <Box>
+            <Button onClick={() => setSelectedDate(new Date())}>
+              {t('common.today')}
+            </Button>
+          </Box>
+        </Box>
+        
+        <Grid container spacing={1}>
+          {days.map((day) => {
+            const dayShifts = getShiftsForDay(day);
+            const isCurrentDay = isToday(day);
+            
+            return (
+              <Grid item xs={12} sm={6} md={12/7} key={day.toISOString()}>
+                <Paper 
+                  sx={{ 
+                    p: 1, 
+                    minHeight: 120,
+                    backgroundColor: isCurrentDay ? 'primary.light' : 'background.paper',
+                    opacity: isCurrentDay ? 0.9 : 1,
+                  }}
+                >
+                  <Typography 
+                    variant="subtitle2" 
+                    sx={{ 
+                      fontWeight: isCurrentDay ? 'bold' : 'normal',
+                      color: isCurrentDay ? 'primary.contrastText' : 'text.primary',
+                    }}
+                  >
+                    {format(day, 'EEE', { locale })}
+                  </Typography>
+                  <Typography 
+                    variant="h6"
+                    sx={{ 
+                      color: isCurrentDay ? 'primary.contrastText' : 'text.primary',
+                    }}
+                  >
+                    {format(day, 'd')}
+                  </Typography>
+                  
+                  {dayShifts.map((shift) => (
+                    <Chip
+                      key={shift.id}
+                      label={`${shift.taxi?.license_plate} ${format(parseISO(shift.start_time), 'HH:mm')}`}
+                      size="small"
+                      sx={{ mt: 0.5, width: '100%' }}
+                      color="primary"
+                      variant={isCurrentDay ? 'filled' : 'outlined'}
+                    />
+                  ))}
+                </Paper>
+              </Grid>
+            );
+          })}
+        </Grid>
+      </Box>
+    );
+  };
+
+  const renderAllShiftsView = () => {
+    const groupedByTaxi = allShifts.reduce((acc, shift) => {
+      const taxiId = shift.taxi?.license_plate || 'Unknown';
+      if (!acc[taxiId]) {
+        acc[taxiId] = [];
+      }
+      acc[taxiId].push(shift);
+      return acc;
+    }, {} as Record<string, ShiftWithDetails[]>);
+
+    return (
+      <Box>
+        <Alert severity="info" sx={{ mb: 2 }}>
+          <Typography variant="body2">
+            {t('shifts.availabilityInfo')}
+          </Typography>
+        </Alert>
+        
+        {Object.entries(groupedByTaxi).map(([taxiPlate, shifts]) => (
+          <Card key={taxiPlate} sx={{ mb: 2 }}>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                <DirectionsCar sx={{ mr: 1 }} />
+                <Typography variant="h6">
+                  {taxiPlate}
+                </Typography>
+                <Chip 
+                  label={`${shifts.length} ${t('shifts.title')}`}
+                  size="small"
+                  sx={{ ml: 2 }}
+                />
+              </Box>
+              
+              <Grid container spacing={1}>
+                {shifts.slice(0, 10).map((shift) => {
+                  const isMyShift = shift.driver_id === user?.id;
+                  return (
+                    <Grid item xs={12} md={6} key={shift.id}>
+                      <Paper 
+                        sx={{ 
+                          p: 1.5, 
+                          backgroundColor: isMyShift ? 'success.light' : 'background.default',
+                          opacity: isMyShift ? 0.9 : 0.7,
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                          <Person sx={{ mr: 1, fontSize: 16 }} />
+                          <Typography variant="body2" sx={{ fontWeight: isMyShift ? 'bold' : 'normal' }}>
+                            {isMyShift ? t('common.you') : `${shift.driver?.first_name} ${shift.driver?.last_name}`}
+                          </Typography>
+                        </Box>
+                        <Typography variant="body2">
+                          {format(parseISO(shift.start_time), 'EEE dd.MM', { locale })}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {format(parseISO(shift.start_time), 'HH:mm')} - 
+                          {format(parseISO(shift.end_time), 'HH:mm')}
+                        </Typography>
+                      </Paper>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            </CardContent>
+          </Card>
+        ))}
+      </Box>
+    );
+  };
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">
-          {t('navigation.myShifts')}
-        </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddCircle />}
-          onClick={() => router.push('/driver/book-shift')}
-        >
-          {t('shifts.bookShift')}
-        </Button>
-      </Box>
+      <Typography variant="h4" gutterBottom>
+        {t('navigation.myShifts')}
+      </Typography>
 
-      {/* Statistics Cards */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <EventNote color="primary" />
-                <Typography color="text.secondary" variant="subtitle2">
-                  Total Shifts
-                </Typography>
-              </Box>
-              <Typography variant="h4">{stats.totalShifts}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Schedule color="secondary" />
-                <Typography color="text.secondary" variant="subtitle2">
-                  Upcoming
-                </Typography>
-              </Box>
-              <Typography variant="h4">{stats.upcomingShifts}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <AccessTime color="success" />
-                <Typography color="text.secondary" variant="subtitle2">
-                  Hours This Week
-                </Typography>
-              </Box>
-              <Typography variant="h4">{stats.hoursThisWeek}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <CalendarMonth color="warning" />
-                <Typography color="text.secondary" variant="subtitle2">
-                  Hours This Month
-                </Typography>
-              </Box>
-              <Typography variant="h4">{stats.hoursThisMonth}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Today's Shifts Alert */}
-      {todaysShifts.length > 0 && (
-        <Alert severity="info" sx={{ mb: 3 }} icon={<Schedule />}>
-          <Typography variant="subtitle1">
-            Today's Shifts: {todaysShifts.map(shift => (
-              <span key={shift.id}>
-                {shift.taxi?.license_plate} ({format(parseISO(shift.start_time), 'HH:mm')} - {format(parseISO(shift.end_time), 'HH:mm')})
-                {todaysShifts.indexOf(shift) < todaysShifts.length - 1 && ', '}
-              </span>
-            ))}
-          </Typography>
-        </Alert>
-      )}
-
-      {/* Shifts Table */}
-      <Paper>
-        <Tabs value={tabValue} onChange={(e, v) => setTabValue(v)} sx={{ px: 2, pt: 2 }}>
-          <Tab label={`${t('shifts.upcomingShifts')} (${upcomingShifts.length})`} />
-          <Tab label={`${t('shifts.pastShifts')} (${pastShifts.length})`} />
+      <Paper sx={{ width: '100%' }}>
+        <Tabs value={tabValue} onChange={(e, v) => setTabValue(v)}>
+          <Tab label={t('navigation.myShifts')} />
+          <Tab label={t('shifts.availability')} />
         </Tabs>
 
-        <TableContainer>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>{t('shifts.taxi')}</TableCell>
-                <TableCell>{t('common.date')}</TableCell>
-                <TableCell>{t('common.startTime')}</TableCell>
-                <TableCell>{t('common.endTime')}</TableCell>
-                <TableCell>{t('common.duration')}</TableCell>
-                <TableCell align="center">Status</TableCell>
-                <TableCell align="right">{t('common.actions')}</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} align="center">
-                    <CircularProgress />
-                  </TableCell>
-                </TableRow>
-              ) : displayedShifts.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} align="center">
-                    <Typography color="text.secondary">
-                      {tabValue === 0 ? t('shifts.noShifts') : 'No past shifts'}
-                    </Typography>
-                    {tabValue === 0 && (
-                      <Button
-                        variant="outlined"
-                        startIcon={<AddCircle />}
-                        onClick={() => router.push('/driver/book-shift')}
-                        sx={{ mt: 2 }}
-                      >
-                        {t('shifts.bookShift')}
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                displayedShifts.map((shift) => {
-                  const status = getShiftStatus(shift);
-                  const duration = differenceInHours(parseISO(shift.end_time), parseISO(shift.start_time));
-                  const canEdit = isFuture(parseISO(shift.start_time));
+        <Box sx={{ p: 3 }}>
+          <TabPanel value={tabValue} index={0}>
+            {/* My Shifts Tab */}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+              <ToggleButtonGroup
+                value={viewMode}
+                exclusive
+                onChange={(e, v) => v && setViewMode(v)}
+                size="small"
+              >
+                <ToggleButton value="list">
+                  <ViewList sx={{ mr: 1 }} />
+                  {t('shifts.listView')}
+                </ToggleButton>
+                <ToggleButton value="calendar">
+                  <CalendarMonth sx={{ mr: 1 }} />
+                  {t('shifts.calendarView')}
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
 
-                  return (
-                    <TableRow key={shift.id}>
-                      <TableCell>
-                        <Chip
-                          icon={<DirectionsCar />}
-                          label={shift.taxi?.license_plate}
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        {format(parseISO(shift.start_time), 'EEE, MMM d, yyyy')}
-                      </TableCell>
-                      <TableCell>
-                        {format(parseISO(shift.start_time), 'HH:mm')}
-                      </TableCell>
-                      <TableCell>
-                        {format(parseISO(shift.end_time), 'HH:mm')}
-                      </TableCell>
-                      <TableCell>
-                        {duration} {t('common.hours')}
-                      </TableCell>
-                      <TableCell align="center">
-                        <Chip
-                          label={status}
-                          size="small"
-                          color={
-                            status === 'ongoing' ? 'success' :
-                            status === 'upcoming' ? 'primary' : 'default'
-                          }
-                        />
-                      </TableCell>
-                      <TableCell align="right">
-                        {canEdit && (
-                          <>
-                            <Tooltip title={t('common.edit')}>
-                              <IconButton
-                                size="small"
-                                onClick={() => router.push(`/driver/edit-shift/${shift.id}`)}
-                              >
-                                <Edit />
-                              </IconButton>
-                            </Tooltip>
-                            <Tooltip title={t('common.delete')}>
-                              <IconButton
-                                size="small"
-                                onClick={() => {
-                                  setCurrentShift(shift);
-                                  setDeleteDialogOpen(true);
-                                }}
-                              >
-                                <Delete />
-                              </IconButton>
-                            </Tooltip>
-                          </>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
+            {viewMode === 'list' ? renderMyShiftsList() : renderCalendarView()}
+          </TabPanel>
+
+          <TabPanel value={tabValue} index={1}>
+            {/* All Shifts/Availability Tab */}
+            {renderAllShiftsView()}
+          </TabPanel>
+        </Box>
       </Paper>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
         <DialogTitle>{t('shifts.deleteShift')}</DialogTitle>
         <DialogContent>
-          <Alert severity="warning">
+          <Typography>
             {t('shifts.confirmDelete')}
-          </Alert>
-          {currentShift && (
-            <Box sx={{ mt: 2 }}>
+          </Typography>
+          {selectedShift && (
+            <Box sx={{ mt: 2, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
               <Typography variant="body2">
-                <strong>Taxi:</strong> {currentShift.taxi?.license_plate}
+                <strong>{t('shifts.taxi')}:</strong> {selectedShift.taxi?.license_plate}
               </Typography>
               <Typography variant="body2">
-                <strong>Date:</strong> {format(parseISO(currentShift.start_time), 'EEEE, MMMM d, yyyy')}
+                <strong>{t('common.date')}:</strong> {format(parseISO(selectedShift.start_time), 'dd.MM.yyyy')}
               </Typography>
               <Typography variant="body2">
-                <strong>Time:</strong> {format(parseISO(currentShift.start_time), 'HH:mm')} - {format(parseISO(currentShift.end_time), 'HH:mm')}
+                <strong>{t('common.time')}:</strong> {format(parseISO(selectedShift.start_time), 'HH:mm')} - {format(parseISO(selectedShift.end_time), 'HH:mm')}
               </Typography>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>{t('common.cancel')}</Button>
+          <Button onClick={() => setDeleteDialogOpen(false)}>
+            {t('common.cancel')}
+          </Button>
           <Button onClick={handleDeleteShift} color="error" variant="contained">
             {t('common.delete')}
           </Button>
